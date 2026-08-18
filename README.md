@@ -1,4 +1,4 @@
-# weirwood
+# Castellan Credential Management Server
 Credential exchange server intended for use with the locksmith plugin, whisper. 
 
 ## Setup
