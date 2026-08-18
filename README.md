@@ -1,8 +1,8 @@
 # Castellan Credential Management Server
-Credential exchange server intended for use with the locksmith plugin, whisper. 
+Credential exchange server intended for use with the locksmith castellan-plugin. 
 
 ## Setup
-Weirwood, in its current state, shares account resources with hkweb and is intended to be hosted via the nightingale 
+Castellan, in its current state, shares account resources with hkweb and is intended to be hosted via the nightingale 
 repo:
 
 to run weirwood, first source the hkweb venv via `source /path/to/nightingale/venv/hkweb/bin/activate`
