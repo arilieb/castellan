@@ -190,7 +190,9 @@ class TestDynamicFieldsIntegration:
         assert result == mock_cred
 
     @patch("castellan.core.services.issued_credential_service.IssuedCredential")
-    def test_update_credential_leaves_omitted_simple_fields_untouched(self, mock_cred_cls):
+    def test_update_credential_leaves_omitted_simple_fields_untouched(
+        self, mock_cred_cls
+    ):
         """Test that simple fields absent from update_data are not modified."""
         service = IssuedCredentialService()
 
