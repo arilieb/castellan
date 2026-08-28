@@ -165,6 +165,54 @@ class TestDynamicFieldsIntegration:
         assert result == mock_cred
 
     @patch("castellan.core.services.issued_credential_service.IssuedCredential")
+    def test_update_credential_persists_simple_fields(self, mock_cred_cls):
+        """Test that status, published, recipient, and notes are persisted."""
+        service = IssuedCredentialService()
+
+        mock_cred = Mock()
+        mock_cred_cls.objects.get.return_value = mock_cred
+
+        update_data = {
+            "status": "revoked",
+            "published": True,
+            "recipient": "ERecipientAID123",
+            "notes": "synced from plugin",
+        }
+
+        result = service.update_credential("said123", update_data)
+
+        assert mock_cred.status == "revoked"
+        assert mock_cred.published is True
+        assert mock_cred.recipient == "ERecipientAID123"
+        assert mock_cred.notes == "synced from plugin"
+
+        mock_cred.save.assert_called_once()
+        assert result == mock_cred
+
+    @patch("castellan.core.services.issued_credential_service.IssuedCredential")
+    def test_update_credential_leaves_omitted_simple_fields_untouched(
+        self, mock_cred_cls
+    ):
+        """Test that simple fields absent from update_data are not modified."""
+        service = IssuedCredentialService()
+
+        mock_cred = Mock()
+        mock_cred.status = "issued"
+        mock_cred.published = False
+        mock_cred.recipient = "EOriginalRecipient"
+        mock_cred.notes = "original notes"
+        mock_cred_cls.objects.get.return_value = mock_cred
+
+        update_data = {"status": "revoked"}
+
+        service.update_credential("said123", update_data)
+
+        assert mock_cred.status == "revoked"
+        assert mock_cred.published is False
+        assert mock_cred.recipient == "EOriginalRecipient"
+        assert mock_cred.notes == "original notes"
+
+    @patch("castellan.core.services.issued_credential_service.IssuedCredential")
     def test_update_credential_validates_dynamic_fields_is_list(self, mock_cred_cls):
         """Test that update_credential validates dynamic_fields is a list."""
         service = IssuedCredentialService()

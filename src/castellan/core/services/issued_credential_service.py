@@ -312,6 +312,11 @@ class IssuedCredentialService:
         """
         cred = self.get_credential(said)
         try:
+            # Handle simple field updates
+            for field in ("status", "published", "recipient", "notes"):
+                if field in update_data:
+                    setattr(cred, field, update_data[field])
+
             # Handle dynamic_fields updates
             if "dynamic_fields" in update_data:
                 dynamic_fields_data = update_data["dynamic_fields"]
