@@ -1,9 +1,12 @@
 # Testing the Castellan Helm chart on EKS
 
 This directory holds everything needed to stand up a disposable EKS cluster and verify
-`charts/castellan` deploys and runs correctly, end to end. It's a scratch/smoke-test
-environment, not a staging or production config — MongoDB runs unauthenticated in-cluster here,
-and `rack.externalLocation.host` is a placeholder that's never actually resolved.
+`charts/castellan` deploys and runs correctly, end to end, including that `castellan-rack` is
+actually reachable from outside the cluster — the precondition for real KERI parties to open ESSR
+sessions with it. It's a scratch/smoke-test environment, not a staging or production config —
+MongoDB runs unauthenticated in-cluster here. A standalone manifest (`nlb-service.yaml`, applied
+independently of the Helm release) provisions a real AWS NLB and is installed as part of the
+normal walkthrough below, not as an optional add-on.
 
 All commands below assume your shell's working directory is the **repo root**.
 
@@ -13,7 +16,8 @@ All commands below assume your shell's working directory is the **repo root**.
 |---|---|
 | `cluster.yaml` | `eksctl` config for the disposable test cluster (1 node, EBS CSI driver pre-wired via IRSA). |
 | `storageclass-gp3-csi.yaml` | Default `StorageClass` backed by the EBS CSI driver — EKS doesn't ship a working one out of the box (see gotcha below). |
-| `values.yaml` | Helm values for this test environment (Docker Hub images, the test Mongo secret, placeholder rack location). |
+| `values.yaml` | Helm values for this test environment (Docker Hub images, the test Mongo secret). Its `rack.externalLocation.host` placeholder is overridden at install time with the real NLB hostname — see [Spin up](#spin-up) and [Install](#install). |
+| `nlb-service.yaml` | Standalone (non-Helm) Service that exposes `castellan-rack` via a real AWS NLB. Applied during [Spin up](#spin-up), deliberately outside the chart/release — see that step for why. |
 
 ## Prerequisites
 
@@ -26,8 +30,9 @@ All commands below assume your shell's working directory is the **repo root**.
   `docker build -f docker/Dockerfile.rack .` if you need to test unpublished changes.
 
 **Cost warning:** an EKS control plane bills continuously from the moment it's created
-(~$0.10/hr as of this writing) plus the EC2 node(s) and EBS volume. Don't leave the cluster up
-longer than you're actively testing — see [Spin down](#spin-down) below.
+(~$0.10/hr as of this writing) plus the EC2 node(s), EBS volume, and the NLB provisioned during
+Spin up. Don't leave the cluster up longer than you're actively testing — see
+[Spin down](#spin-down) below.
 
 ## Spin up
 
@@ -56,7 +61,38 @@ kubectl get storageclass   # gp3-csi should show "(default)"
 kubectl create namespace castellan-test
 ```
 
-**4. Stand up a throwaway MongoDB** (no auth — fine for this smoke test, not representative of a
+**4. Provision the real AWS NLB, before installing the app.** `castellan-init` only ever
+provisions the `rack` AID's location once per keystore — see
+[Gotcha: `rack.externalLocation.host` can't be changed after first
+install](#gotcha-rackexternallocationhost-cant-be-changed-after-first-install). Provisioning the
+NLB first means the very first `helm install` below can bake in the real, final hostname, so you
+never need to wipe the keystore and reinstall just to get a working external address:
+```bash
+kubectl apply -f charts/castellan/testing/nlb-service.yaml
+kubectl get svc castellan-rack-nlb -n castellan-test -w   # wait for EXTERNAL-IP to populate
+NLB_HOST=$(kubectl get svc castellan-rack-nlb -n castellan-test \
+  -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+echo "$NLB_HOST"
+```
+`nlb-service.yaml` selects the same pod labels the chart's Deployment produces, so the NLB starts
+routing as soon as those pods exist — it doesn't need the app installed first. Note `$NLB_HOST`
+down and reuse it for the rest of this testing session; it stays stable for as long as
+`castellan-rack-nlb` exists, unaffected by any `helm install`/`upgrade`/`uninstall` of the
+`castellan` release.
+
+**Why a standalone Service instead of a chart values overlay:** in a real deployment, whoever
+stands up the TCP ingress owns that infrastructure separately from this chart, and already knows
+the domain they've assigned it *before* installing castellan — the chart only ever needs to
+receive that value once, correctly, on the very first install. This test mirrors that ordering by
+keeping the NLB's lifecycle **entirely outside the Helm release**: `nlb-service.yaml` is a plain
+Kubernetes manifest (not a chart template), applied and torn down via `kubectl` directly. `helm
+install`/`helm uninstall`/`helm upgrade` of the `castellan` release never touches it, so you can
+wipe the keystore and reinstall the app as many times as you want without ever losing the NLB or
+getting a new hostname — this is *not* possible if the chart's own Service is made `LoadBalancer`
+(its NLB is deleted the moment `helm uninstall` deletes the Service, and a fresh `helm install`
+gets a new one with a different hostname — confirmed live while developing this test).
+
+**5. Stand up a throwaway MongoDB** (no auth — fine for this smoke test, not representative of a
 real deployment, which uses Greg's externally-hosted, credentialed MongoDB):
 ```bash
 kubectl -n castellan-test create deployment mongodb --image=mongo:8.0
@@ -64,7 +100,7 @@ kubectl -n castellan-test expose deployment mongodb --port=27017
 kubectl -n castellan-test rollout status deploy/mongodb
 ```
 
-**5. Create the Mongo connection secret** the chart expects
+**6. Create the Mongo connection secret** the chart expects
 (`mongodb.connectionString.secretName` in `values.yaml`):
 ```bash
 kubectl -n castellan-test create secret generic castellan-mongo-conn \
@@ -74,7 +110,7 @@ No `mongodb.credentials.secretName` secret is needed here since this test Mongo 
 leaving that value unset in `values.yaml` is what makes the chart skip emitting
 `CASTELLAN_DB_USER`/`CASTELLAN_DB_PASS` entirely (see `_helpers.tpl`'s `castellan.mongoEnv`).
 
-**6. If your Docker Hub images are private**, add a pull secret and reference it as
+**7. If your Docker Hub images are private**, add a pull secret and reference it as
 `imagePullSecrets` in `values.yaml`:
 ```bash
 kubectl -n castellan-test create secret docker-registry dockerhub-creds \
@@ -91,9 +127,12 @@ helm lint charts/castellan -f charts/castellan/testing/values.yaml
 helm template castellan charts/castellan -f charts/castellan/testing/values.yaml | less
 ```
 
-Install:
+Install with the real NLB host from [Spin up](#spin-up) step 4 baked in from the start — this is
+what lets the reachability checks in [Verify](#verify) below pass without a second install:
 ```bash
-helm install castellan charts/castellan -n castellan-test -f charts/castellan/testing/values.yaml
+helm install castellan charts/castellan -n castellan-test \
+  -f charts/castellan/testing/values.yaml \
+  --set rack.externalLocation.host="$NLB_HOST"
 ```
 `STATUS: deployed` in the output means the `castellan-init` pre-install hook Job already ran to
 completion — Helm won't report success otherwise. If it fails, see
@@ -139,12 +178,27 @@ done
 kubectl -n castellan-test port-forward svc/castellan-oobi 5927:5927 &
 curl http://127.0.0.1:5927/oobi/server
 ```
-Should return the `rack` AID with the `rack.externalLocation.host` value from `values.yaml`.
+Should return the `rack` AID with the `rack.externalLocation.host` value — i.e. `$NLB_HOST` from
+[Spin up](#spin-up) step 4, since that's what [Install](#install) baked in, not the placeholder
+from `values.yaml`.
 
-**Not testable in this environment:** an actual ESSR round trip through `castellan-rack`'s
-exposed port needs a real, externally-resolvable `rack.externalLocation.host` behind an AWS NLB
-(port 5923 is raw TCP, not HTTP/ALB-compatible) — that depends on Greg's ingress setup for the
-real cluster and can't be exercised here.
+**Reachability from outside the cluster.** The checks above only prove `castellan-rack`'s port is
+reachable *inside* the cluster (`rack.service.type: ClusterIP`, the production default too). This
+confirms it's also reachable from outside — the precondition for real KERI parties to open ESSR
+sessions with it. Run this from your own machine, not from inside a pod:
+```bash
+nc -zv "$NLB_HOST" 5923
+```
+A successful TCP connect (or immediate close, since nothing has sent a valid ESSR frame) confirms
+Layer 4 reachability through `castellan-rack-nlb` (provisioned in [Spin up](#spin-up) step 4).
+`connection refused`/`timed out` means the NLB, its target group, or the node security group isn't
+routing traffic through yet — give the NLB a minute or two after `EXTERNAL-IP` appeared, since AWS
+provisioning lags slightly behind the Kubernetes object.
+
+**Not testable in this environment:** this only confirms the port is reachable, not that a full
+ESSR handshake succeeds — that needs a second, real external KERI party actually attempting the
+protocol exchange, which depends on Greg's ingress setup for the real cluster and can't be
+exercised here.
 
 ## Spin down
 
@@ -152,8 +206,15 @@ real cluster and can't be exercised here.
 helm uninstall castellan -n castellan-test
 kubectl delete pvc castellan-keri-data -n castellan-test   # not deleted by uninstall -- see gotcha below
 kubectl delete namespace castellan-test
+kubectl delete -f charts/castellan/testing/nlb-service.yaml
 eksctl delete cluster --region=us-east-1 --name=castellan-test
 ```
+`kubectl delete namespace` also removes `castellan-rack-nlb` (provisioned in [Spin
+up](#spin-up) step 4) — it's namespace-scoped even though it's not Helm-managed. If you're
+stopping short of a full spin-down but are done with the NLB specifically, tear it down on its
+own first with `kubectl delete -f charts/castellan/testing/nlb-service.yaml` so it doesn't keep
+billing.
+
 The last step tears down the CloudFormation stacks (nodegroup + control plane) and stops billing.
 It takes a few minutes; `eksctl` will wait for it.
 
@@ -166,6 +227,29 @@ failed Helm release, and no stale `castellan-init` Job to worry about.
 ## Troubleshooting
 
 These are real issues hit while first standing this up — not hypothetical.
+
+### Gotcha: `rack.externalLocation.host` can't be changed after first install
+`docker/scripts/castellan-init.sh` only provisions the `rack` AID (including its end-role and
+location records) the first time it runs against a given keystore — once the AID exists, the whole
+block is skipped, including `kli location add`. A later `helm upgrade --set
+rack.externalLocation.host=...` against a surviving keystore/PVC will **not** update the location:
+the init Job still runs (it's a `pre-install,pre-upgrade` hook), but it silently no-ops since the
+`rack` AID already exists.
+
+This is intentional for now, not an oversight: in a real deployment, whoever provisions the TCP
+ingress already knows the domain beforehand, so the chart only ever needs the correct value once,
+on the very first install. [Spin up](#spin-up) step 4 provisions the NLB *before* [Install](#install)
+for exactly this reason — the walkthrough above only ever needs one `helm install`. If you still
+need to change the host afterward in this test environment — a new NLB, a typo, anything — you
+must wipe the keystore and reinstall clean:
+```bash
+helm uninstall castellan -n castellan-test
+kubectl delete pvc castellan-keri-data -n castellan-test
+helm install castellan charts/castellan -n castellan-test \
+  -f charts/castellan/testing/values.yaml \
+  --set rack.externalLocation.host="<new-host>"
+```
+There is no supported update path short of this.
 
 ### Gotcha: PVC stuck `Pending`
 Symptom: `kubectl get pvc -n castellan-test` shows `castellan-keri-data` stuck `Pending`, with
