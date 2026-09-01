@@ -154,6 +154,11 @@ kubectl logs -n castellan-test deploy/castellan -c castellan-rack
 kubectl logs -n castellan-test deploy/castellan-oobi
 ```
 
+**Mongo Access**
+```bash
+kubectl exec -it -n castellan-test deploy/mongodb -- mongosh
+```
+
 **Confirm `shareProcessNamespace` is actually working** — this is the load-bearing part of the
 whole two-container-one-pod design (see `charts/castellan/templates/deployment-castellan.yaml`'s
 comments and `docker/README.md` for why): from inside the `castellan-rack` container, both
@@ -199,6 +204,40 @@ provisioning lags slightly behind the Kubernetes object.
 ESSR handshake succeeds — that needs a second, real external KERI party actually attempting the
 protocol exchange, which depends on Greg's ingress setup for the real cluster and can't be
 exercised here.
+
+## Account Creation
+
+The chart mounts a helper script, rendered from `charts/castellan/templates/configmap-castellan-account.yaml`,
+into the `castellan` container at `docker/scripts/castellan-account.sh`. It wraps `castellan account
+create` for the common case of registering an account against the credentials this release is
+already configured with, without needing to retype the Mongo connection details by hand.
+
+`--name`/`--alias` are hardcoded to `castellan` — this pod only ever manages the one keystore — but
+`--dbhost`/`--dbname`/`--dbuser`/`--dbpass` default to whatever `MONGODB_HOST`/`CASTELLAN_DB_NAME`/
+`CASTELLAN_DB_USER`/`CASTELLAN_DB_PASS` are already set to in the `castellan` container's
+environment (populated from `values.yaml`'s `mongodb.*` settings via `_helpers.tpl`'s
+`castellan.mongoEnv` — the same env vars `docker/scripts/castellan.sh` itself reads). Passing a flag
+overrides its corresponding default; a flag is only omitted from the underlying `castellan account
+create` call if both the flag and the matching env var are unset (e.g. `CASTELLAN_DB_USER`/
+`CASTELLAN_DB_PASS` when this release's Mongo has no auth — see [Spin up](#spin-up) step 6).
+
+Run it interactively, since it prompts for the account username and OOBI:
+```bash
+kubectl exec -it -n castellan-test deploy/castellan -c castellan -- \
+  bash docker/scripts/castellan-account.sh
+```
+It will prompt:
+```
+Enter the account username:
+Enter the account OOBI:
+```
+
+To point at a different database than this release's own — e.g. testing against a second Mongo —
+override any subset of the flags:
+```bash
+kubectl exec -it -n castellan-test deploy/castellan -c castellan -- \
+  bash docker/scripts/castellan-account.sh --dbhost mongodb://other-mongo:27017 --dbname castellan
+```
 
 ## Spin down
 

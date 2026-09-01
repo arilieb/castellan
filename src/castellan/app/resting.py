@@ -21,6 +21,7 @@ from castellan.app.api.json_schema import (
 )
 from castellan.app.api.message import MessageCollectionEnd, MessageResourceEnd
 from castellan.app.api.schema_field_tracking import SchemaFieldTrackingEnd
+from castellan.app.api.health import HealthEnd
 from castellan.app.api.received_credential import (
     ReceivedCredentialCollectionEnd,
     ReceivedCredentialResourceEnd,
@@ -210,6 +211,10 @@ def setup(
     # Intra-enterprise mailbox routes
     app.add_route("/messages", MessageCollectionEnd(msg_svc))
     app.add_route("/messages/{id}", MessageResourceEnd(msg_svc))
+
+    # Health check route (authenticated — verifies the signed connection works
+    # end-to-end, not just that the process is alive)
+    app.add_route("/health", HealthEnd())
 
     # Authentication middleware (reuses healthKERI account infrastructure)
     auth = Authenticater(hab, account_svc)
