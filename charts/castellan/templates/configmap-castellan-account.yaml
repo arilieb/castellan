@@ -1,0 +1,55 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "castellan.fullname" . }}-account-script
+  labels:
+    {{- include "castellan.labels" . | nindent 4 }}
+data:
+  castellan-account.sh: |
+    #!/bin/bash
+    set -euo pipefail
+
+    DBHOST="${MONGODB_HOST:-}"
+    DBNAME="${CASTELLAN_DB_NAME:-}"
+    DBUSER="${CASTELLAN_DB_USER:-}"
+    DBPASS="${CASTELLAN_DB_PASS:-}"
+
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --dbhost) DBHOST="$2"; shift 2 ;;
+        --dbname) DBNAME="$2"; shift 2 ;;
+        --dbuser) DBUSER="$2"; shift 2 ;;
+        --dbpass) DBPASS="$2"; shift 2 ;;
+        *) echo "Unknown argument: $1" >&2; exit 1 ;;
+      esac
+    done
+
+    printf "\n\n"
+    read -p "Enter the account username: " -r USERNAME
+    read -p "Enter the account OOBI: " -r OOBI
+    printf "\n\n"
+
+    args=(
+      --name castellan
+      --alias castellan
+      --account-username "${USERNAME}"
+      --account-oobi "${OOBI}"
+    )
+
+    if [ -n "${DBHOST}" ]; then
+      args+=(--dbhost "${DBHOST}")
+    fi
+
+    if [ -n "${DBNAME}" ]; then
+      args+=(--dbname "${DBNAME}")
+    fi
+
+    if [ -n "${DBUSER}" ]; then
+      args+=(--dbuser "${DBUSER}")
+    fi
+
+    if [ -n "${DBPASS}" ]; then
+      args+=(--dbpass "${DBPASS}")
+    fi
+
+    castellan account create "${args[@]}"
