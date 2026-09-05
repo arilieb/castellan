@@ -161,11 +161,19 @@ class IdentifierCollectionEnd:
 
         try:
             identifiers, total, num_pages = self.service.list_identifiers(
-                page=page, page_size=page_size, filter_term=filter_term, order=order,
+                page=page,
+                page_size=page_size,
+                filter_term=filter_term,
+                order=order,
             )
             serialized = [
                 _serialize(
-                    i, self.service.get_key_state_summary(i.aid) if include_key_state else None
+                    i,
+                    (
+                        self.service.get_key_state_summary(i.aid)
+                        if include_key_state
+                        else None
+                    ),
                 )
                 for i in identifiers
             ]

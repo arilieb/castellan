@@ -145,7 +145,9 @@ class IdentifierService:
         qs = UploadedIdentifier.objects()
 
         if filter_term:
-            qs = qs.filter(Q(alias__icontains=filter_term) | Q(aid__icontains=filter_term))
+            qs = qs.filter(
+                Q(alias__icontains=filter_term) | Q(aid__icontains=filter_term)
+            )
 
         if order:
             if isinstance(order, str):
