@@ -73,7 +73,7 @@ Two caveats:
 | Field | Default | When to change it |
 |---|---|---|
 | `ports.boot` / `ports.witness` | `5631` / `5632` | Only if something else on your nodes conflicts. `boot` is never exposed outside the cluster regardless. |
-| `replicaCount` | `3` | Scale to however many independently-addressable witnesses you need. See PVC retention caveats above before scaling down. |
+| `replicaCount` | `3` | Scale to however many independent witopnet nodes (failure domains) you need — not witness count. Each node already hosts an arbitrary number of witnesses via its own boot API (`POST /witnesses`), independent of replica count. See PVC retention caveats above before scaling down. |
 | `imagePullSecrets` | `[]` | If your image registry is private. |
 | `persistence.storageClassName` | `""` (cluster default) | Set explicitly if your cluster has no default `StorageClass`, or you want a specific one. |
 | `persistence.size` | `5Gi` | Bump if you expect a large per-witness keystore. |
